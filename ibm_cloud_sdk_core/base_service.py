@@ -24,7 +24,9 @@ import gzip
 from typing import Dict, List, Optional, Tuple, Union
 
 import requests
+from requests.adapters import HTTPAdapter
 from requests.structures import CaseInsensitiveDict
+from urllib3.util.retry import Retry
 from ibm_cloud_sdk_core.authenticators import Authenticator
 from .version import __version__
 from .utils import (
@@ -82,9 +84,14 @@ class BaseService:
                  service_url: str = None,
                  authenticator: Authenticator = None,
                  disable_ssl_verification: bool = False,
-                 enable_gzip_compression: bool = False) -> None:
+                 enable_gzip_compression: bool = False,
+                 max_retries: int = 10,
+                 retry_interval: float = 0.1) -> None:
         self.set_service_url(service_url)
         self.http_client = requests.Session()
+        self.max_retries = max_retries
+        self.retry_interval = retry_interval
+        self.setup_http_client()
         self.http_config = {}
         self.jar = CookieJar()
         self.authenticator = authenticator
@@ -97,6 +104,22 @@ class BaseService:
         if not isinstance(self.authenticator, Authenticator):
             raise ValueError(
                 'authenticator should be of type Authenticator')
+
+    def setup_http_client(self) -> None:
+        """Setup http_client with retry_config and http_adapter"""
+        self.retry_config = Retry(
+            total = self.max_retries,
+            backoff_factor = self.retry_interval,
+            # List of HTTP status codes to retry on in addition to Timeout/Connection Errors
+            status_forcelist = [429, 500, 502, 503, 504],
+            # List of HTTP methods to retry on
+            # Omitting this will default to all methods except POST
+            allowed_methods=['HEAD', 'GET', 'PUT', 'DELETE', 'OPTIONS', 'TRACE', 'POST']
+        )
+        self.http_adapter = HTTPAdapter(max_retries=self.retry_config)
+        self.http_client.mount('http://', self.http_adapter)
+        self.http_client.mount('https://', self.http_adapter)
+
 
     @staticmethod
     def _get_system_info() -> str:
@@ -136,6 +159,14 @@ class BaseService:
             )
         if config.get('ENABLE_GZIP') is not None:
             self.set_enable_gzip_compression(config.get('ENABLE_GZIP') == 'True')
+        if config.get('MAX_RETRIES'):
+            self.set_max_retries(
+                int(config.get('MAX_RETRIES'))
+            )
+        if config.get('RETRY_INTERVAL'):
+            self.set_retry_interval(
+                float(config.get('RETRY_INTERVAL'))
+            )
 
     def _set_user_agent_header(self, user_agent_string: str) -> None:
         self.user_agent_header = {'User-Agent': user_agent_string}
@@ -167,6 +198,26 @@ class BaseService:
             status: set to true to disable ssl verification (default: {False})
         """
         self.disable_ssl_verification = status
+
+    def set_max_retries(self, max_retries: int = 10) -> None:
+        """Set the flag that indicates whether verification of
+        the server's SSL certificate should be disabled or not.
+
+        Keyword Arguments:
+            max_retries: set to true to disable ssl verification (default: {False})
+        """
+        self.max_retries = max_retries
+        self.setup_http_client()
+
+    def set_retry_interval(self, retry_interval: float = 0.1) -> None:
+        """Set the flag that indicates whether verification of
+        the server's SSL certificate should be disabled or not.
+
+        Keyword Arguments:
+            retry_interval: set to true to disable ssl verification (default: {False})
+        """
+        self.retry_interval = retry_interval
+        self.setup_http_client()
 
     def set_service_url(self, service_url: str) -> None:
         """Set the url the service will make HTTP requests too.

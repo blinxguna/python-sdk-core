@@ -554,6 +554,27 @@ def test_gzip_compression_external():
     assert prepped['headers'].get('content-encoding') == 'gzip'
 
 @responses.activate
+def test_retry_config_external():
+    # Should set gzip compression from external config
+    file_path = os.path.join(
+        os.path.dirname(__file__), '../resources/ibm-credentials-retry.env')
+    os.environ['IBM_CREDENTIALS_FILE'] = file_path
+    service = IncludeExternalConfigService('v1', authenticator=NoAuthAuthenticator())
+    assert service.retry_config.total == 5
+    assert service.retry_config.backoff_factor == 0.2
+
+    responses.add(
+        responses.GET,
+        'https://mockurl/',
+        status=200,
+        body=json.dumps({
+            'foo': 'bar'
+        }))
+    prepped = service.prepare_request('GET', url='')
+    response = service.send(prepped)
+    assert response.get_result() == {'foo': 'bar'}
+
+@responses.activate
 def test_user_agent_header():
     service = AnyServiceV1('2018-11-20', authenticator=NoAuthAuthenticator())
     user_agent_header = service.user_agent_header
